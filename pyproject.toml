@@ -1,0 +1,19 @@
+[project]
+name = "atlas-api"
+version = "0.1.0"
+description = "FastAPI backend for PipelineAtlas"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "atlas-sdk",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pydantic-settings>=2.2",
+    "psycopg[binary]>=3.1",
+    "psycopg-pool>=3.2",
+    "redis>=5.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
