@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from atlas_api.config import ApiConfig
 from atlas_api.db import init_db, get_db_pool
-from atlas_api.routes import graphs, reports, health
+from atlas_api.routes import graphs, proposals, reports, health
 
 # Setup logging
 logging.basicConfig(
@@ -59,3 +59,5 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(graphs.router, prefix="/api/v1/graphs", tags=["graphs"])
 app.include_router(reports.router, prefix="/api/v1/reports", tags=["reports"])
+app.include_router(proposals.router)
+
