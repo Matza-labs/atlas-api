@@ -2,6 +2,7 @@
 
 import logging
 from contextlib import asynccontextmanager
+import asyncio
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +13,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from atlas_api.config import ApiConfig
 from atlas_api.limiter import limiter
 from atlas_api.db import init_db, get_db_pool, create_tables
-from atlas_api.routes import graphs, proposals, reports, trends, webhooks, health
+from atlas_api.routes import graphs, proposals, reports, trends, webhooks, health, billing, admin
+from atlas_api.worker import run_usage_worker
 
 # Setup logging
 logging.basicConfig(
@@ -35,10 +37,19 @@ async def lifespan(app: FastAPI):
     logger.info("Database connection pool opened")
     await create_tables(pool)
     
+    # Start worker
+    worker_task = asyncio.create_task(run_usage_worker(config))
+    
     yield
     
     # Shutdown
     logger.info("Shutting down atlas-api")
+    worker_task.cancel()
+    try:
+        await worker_task
+    except asyncio.CancelledError:
+        pass
+        
     if pool:
         await pool.close()
         logger.info("Database connection pool closed")
@@ -74,4 +85,6 @@ app.include_router(reports.router, prefix="/api/v1/reports", tags=["reports"])
 app.include_router(proposals.router)
 app.include_router(trends.router)
 app.include_router(webhooks.router)
+app.include_router(billing.router, prefix="/api/v1/billing", tags=["billing"])
+app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
 

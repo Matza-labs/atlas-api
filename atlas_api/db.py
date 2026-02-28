@@ -56,7 +56,22 @@ async def create_tables(pool: AsyncConnectionPool) -> None:
                     sender       TEXT,
                     action       TEXT,
                     received_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
+                );
+                
+                CREATE TABLE IF NOT EXISTS tenants (
+                    id                 TEXT PRIMARY KEY,
+                    name               TEXT NOT NULL,
+                    plan_tier          TEXT NOT NULL DEFAULT 'free',
+                    stripe_customer_id TEXT,
+                    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                
+                CREATE TABLE IF NOT EXISTS tenant_usage (
+                    tenant_id    TEXT PRIMARY KEY REFERENCES tenants(id),
+                    scans_count  INTEGER NOT NULL DEFAULT 0,
+                    token_count  INTEGER NOT NULL DEFAULT 0,
+                    last_updated TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
                 """
             )
         await conn.commit()

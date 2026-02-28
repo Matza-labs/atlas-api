@@ -130,3 +130,34 @@ async def update_proposal(
 
     proposal["updated_at"] = datetime.now(timezone.utc).isoformat()
     return proposal
+
+
+@router.post("/{proposal_id}/apply")
+async def apply_proposal(
+    proposal_id: str,
+    authorization: str = Header(...),
+) -> dict[str, Any]:
+    user = get_current_user(authorization)
+    require_role(user, "admin")
+    """Apply a proposal's refactor plan back to the CI system (simulated)."""
+    if proposal_id not in _proposals:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+
+    proposal = _proposals[proposal_id]
+
+    if proposal["status"] != "approved":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot apply proposal in '{proposal['status']}' state. Must be 'approved'."
+        )
+
+    # In Phase 4, "Auto-Modification" triggers the writer generated patch
+    # For now, it simulates the push to Github/Gitlab and marks applied.
+    proposal["status"] = "applied"
+    proposal["comments"].append({
+        "author": "system",
+        "text": "Automated fixes successfully pushed to repository.",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    proposal["updated_at"] = datetime.now(timezone.utc).isoformat()
+    return proposal
