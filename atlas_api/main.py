@@ -5,9 +5,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from atlas_api.config import ApiConfig
-from atlas_api.db import init_db, get_db_pool
+from atlas_api.limiter import limiter
+from atlas_api.db import init_db, get_db_pool, create_tables
 from atlas_api.routes import graphs, proposals, reports, trends, webhooks, health
 
 # Setup logging
@@ -29,6 +33,7 @@ async def lifespan(app: FastAPI):
     pool = await get_db_pool()
     await pool.open()
     logger.info("Database connection pool opened")
+    await create_tables(pool)
     
     yield
     
@@ -46,13 +51,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 # CORS middleware for the dashboard UI
+_cors_origins_raw = config.cors_allowed_origins
+_cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()] if _cors_origins_raw else []
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production this should be configured!
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins or ["http://localhost:3000"],
+    allow_credentials=False,  # Never combine allow_credentials=True with wildcard origins
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Tenant-Id"],
 )
 
 # Register routers

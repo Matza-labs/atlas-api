@@ -21,10 +21,30 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-# Default secret — MUST be overridden in production via env var
-_JWT_SECRET = "atlas-dev-secret-change-in-production"
+import os as _os
+
 _JWT_ALGORITHM = "HS256"
 _JWT_EXPIRY_SECONDS = 3600  # 1 hour
+
+# Loaded lazily on first use so imports don't fail without the env var.
+_JWT_SECRET_CACHE: str = ""
+
+
+def _get_jwt_secret() -> str:
+    """Return the JWT signing secret, validating it is set in production."""
+    global _JWT_SECRET_CACHE
+    if _JWT_SECRET_CACHE:
+        return _JWT_SECRET_CACHE
+    secret = _os.environ.get("ATLAS_JWT_SECRET", "")
+    if not secret:
+        if _os.environ.get("ATLAS_API_ENVIRONMENT", "production") == "production":
+            raise RuntimeError(
+                "ATLAS_JWT_SECRET environment variable is required in production. "
+                "Set it to a cryptographically random string of at least 32 characters."
+            )
+        secret = "atlas-dev-secret-do-not-use-in-production"
+    _JWT_SECRET_CACHE = secret
+    return secret
 
 
 class User(BaseModel):
@@ -78,8 +98,9 @@ def _hmac_sign(payload: str, secret: str) -> str:
     return _b64_encode(sig)
 
 
-def create_token(user: User, secret: str = _JWT_SECRET, expiry: int = _JWT_EXPIRY_SECONDS) -> str:
+def create_token(user: User, secret: str | None = None, expiry: int = _JWT_EXPIRY_SECONDS) -> str:
     """Create a JWT token for a user."""
+    _secret = secret or _get_jwt_secret()
     header = _b64_encode(json.dumps({"alg": _JWT_ALGORITHM, "typ": "JWT"}).encode())
     payload_data = {
         "sub": user.id,
@@ -89,12 +110,13 @@ def create_token(user: User, secret: str = _JWT_SECRET, expiry: int = _JWT_EXPIR
         "iat": int(time.time()),
     }
     payload = _b64_encode(json.dumps(payload_data).encode())
-    signature = _hmac_sign(f"{header}.{payload}", secret)
+    signature = _hmac_sign(f"{header}.{payload}", _secret)
     return f"{header}.{payload}.{signature}"
 
 
-def verify_token(token: str, secret: str = _JWT_SECRET) -> User:
+def verify_token(token: str, secret: str | None = None) -> User:
     """Verify a JWT token and return the User."""
+    _secret = secret or _get_jwt_secret()
     parts = token.split(".")
     if len(parts) != 3:
         raise AuthError("Invalid token format")
@@ -102,7 +124,7 @@ def verify_token(token: str, secret: str = _JWT_SECRET) -> User:
     header_b64, payload_b64, signature = parts
 
     # Verify signature
-    expected_sig = _hmac_sign(f"{header_b64}.{payload_b64}", secret)
+    expected_sig = _hmac_sign(f"{header_b64}.{payload_b64}", _secret)
     if not hmac.compare_digest(signature, expected_sig):
         raise AuthError("Invalid token signature")
 

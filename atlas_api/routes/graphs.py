@@ -1,41 +1,46 @@
 """Graphs API endpoints."""
 
 import json
-from fastapi import APIRouter, Depends, HTTPException
+import logging
+from fastapi import APIRouter, Depends, HTTPException, Header
 from psycopg import AsyncConnection
 
 from atlas_api.db import get_db_connection
 from atlas_api.dependencies import get_tenant_id
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 @router.get("/")
 async def list_graphs(
     limit: int = 50,
+    offset: int = 0,
     conn: AsyncConnection = Depends(get_db_connection),
     tenant_id: str = Depends(get_tenant_id),
 ):
-    """List all stored graphs for the tenant."""
-    # MVP: We use the tenant_id as a dummy filter or just ignore it if no tenant col exists yet.
-    # We will query the cicd_graphs table created by atlas-graph
-    
-    # Let's ensure the table exists or handle if it doesn't
+    """List stored graphs for the tenant with cursor pagination.
+
+    Args:
+        limit:  Maximum number of results to return (default 50, max 200).
+        offset: Number of rows to skip for pagination (default 0).
+    """
+    limit = min(limit, 200)  # hard cap
     try:
         async with conn.cursor() as cur:
             await cur.execute(
                 "SELECT id, name, platform, created_at FROM cicd_graphs "
-                "ORDER BY updated_at DESC LIMIT %s",
-                (limit,)
+                "ORDER BY updated_at DESC LIMIT %s OFFSET %s",
+                (limit, offset)
             )
             rows = await cur.fetchall()
-            
+
         return [
             {"id": r[0], "name": r[1], "platform": r[2], "created_at": r[3]}
             for r in rows
         ]
-    except Exception as e:
-        # Table might not exist if graph service hasn't run
+    except Exception:
+        # Table might not exist if graph service hasn't run yet
         return []
 
 
@@ -66,5 +71,6 @@ async def get_graph(
         
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Failed to fetch graph %s", graph_id)
+        raise HTTPException(status_code=500, detail="Internal server error")

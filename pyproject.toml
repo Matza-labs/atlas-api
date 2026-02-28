@@ -12,8 +12,29 @@ dependencies = [
     "psycopg[binary]>=3.1",
     "psycopg-pool>=3.2",
     "redis>=5.0",
+    "slowapi>=0.1.9",
+]
+
+[project.scripts]
+atlas-api = "atlas_api.__main__:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-asyncio>=0.21",
+    "httpx>=0.25",
+    "ruff>=0.1.0",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+testpaths = ["tests"]

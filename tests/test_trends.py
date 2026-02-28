@@ -4,6 +4,7 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 
 from atlas_api.routes.trends import _snapshots
+from tests.conftest import admin_headers
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +28,7 @@ def _get_app():
 @pytest.mark.asyncio
 async def test_create_snapshot():
     app = _get_app()
+    hdrs = admin_headers()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post("/api/v1/snapshots", json={
             "graph_name": "My CI",
@@ -34,7 +36,7 @@ async def test_create_snapshot():
             "fragility_score": 60.0,
             "maturity_score": 35.0,
             "finding_count": 12,
-        })
+        }, headers=hdrs)
         assert resp.status_code == 201
         data = resp.json()
         assert data["graph_name"] == "My CI"
@@ -45,13 +47,14 @@ async def test_create_snapshot():
 async def test_get_trends_no_data():
     app = _get_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get("/api/v1/trends/NonExistent")
+        resp = await client.get("/api/v1/trends/NonExistent", headers=admin_headers())
         assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_get_trends_with_data():
     app = _get_app()
+    hdrs = admin_headers()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Create two snapshots to generate trends
         await client.post("/api/v1/snapshots", json={
@@ -60,16 +63,16 @@ async def test_get_trends_with_data():
             "fragility_score": 60.0,
             "maturity_score": 30.0,
             "finding_count": 15,
-        })
+        }, headers=hdrs)
         await client.post("/api/v1/snapshots", json={
             "graph_name": "CI Pipeline",
             "complexity_score": 40.0,
             "fragility_score": 45.0,
             "maturity_score": 50.0,
             "finding_count": 8,
-        })
+        }, headers=hdrs)
 
-        resp = await client.get("/api/v1/trends/CI Pipeline")
+        resp = await client.get("/api/v1/trends/CI Pipeline", headers=hdrs)
         assert resp.status_code == 200
         data = resp.json()
         assert data["total_snapshots"] == 2

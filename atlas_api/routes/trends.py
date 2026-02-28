@@ -10,8 +10,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
+from atlas_api.auth import get_current_user
 
 router = APIRouter(prefix="/api/v1", tags=["trends"])
 
@@ -31,8 +32,12 @@ class CreateSnapshotRequest(BaseModel):
 
 
 @router.post("/snapshots", status_code=201)
-async def create_snapshot(req: CreateSnapshotRequest) -> dict[str, Any]:
+async def create_snapshot(
+    req: CreateSnapshotRequest,
+    authorization: str = Header(...),
+) -> dict[str, Any]:
     """Store a scan snapshot."""
+    get_current_user(authorization)
     from uuid import uuid4
 
     snapshot = {
@@ -56,8 +61,12 @@ async def create_snapshot(req: CreateSnapshotRequest) -> dict[str, Any]:
 
 
 @router.get("/trends/{graph_name}")
-async def get_trends(graph_name: str) -> dict[str, Any]:
+async def get_trends(
+    graph_name: str,
+    authorization: str = Header(...),
+) -> dict[str, Any]:
     """Get trend data for a pipeline."""
+    get_current_user(authorization)
     snapshots = _snapshots.get(graph_name, [])
     if not snapshots:
         raise HTTPException(status_code=404, detail=f"No snapshots for '{graph_name}'")

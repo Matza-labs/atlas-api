@@ -15,8 +15,8 @@ async def health_check(pool: AsyncConnectionPool = Depends(get_db_pool)):
         async with pool.connection() as conn:
             await conn.execute("SELECT 1")
         db_status = "ok"
-    except Exception as e:
-        db_status = f"error: {e}"
+    except Exception:
+        db_status = "error"  # Never return exception details — they may leak connection strings
 
     return {
         "status": "up" if db_status == "ok" else "degraded",

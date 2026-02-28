@@ -39,3 +39,25 @@ async def get_db_connection() -> AsyncGenerator:
     pool = await get_db_pool()
     async with pool.connection() as conn:
         yield conn
+
+
+async def create_tables(pool: AsyncConnectionPool) -> None:
+    """Create required database tables if they do not already exist."""
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS webhook_events (
+                    id           TEXT PRIMARY KEY,
+                    platform     TEXT NOT NULL,
+                    event_type   TEXT NOT NULL,
+                    repository   TEXT,
+                    ref          TEXT,
+                    sender       TEXT,
+                    action       TEXT,
+                    received_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+        await conn.commit()
+    logger.info("Database tables verified/created")

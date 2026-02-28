@@ -12,8 +12,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
+from atlas_api.auth import get_current_user, require_role
 
 router = APIRouter(prefix="/api/v1/proposals", tags=["proposals"])
 
@@ -38,7 +39,12 @@ class UpdateProposalRequest(BaseModel):
 
 
 @router.post("", status_code=201)
-async def create_proposal(req: CreateProposalRequest) -> dict[str, Any]:
+async def create_proposal(
+    req: CreateProposalRequest,
+    authorization: str = Header(...),
+) -> dict[str, Any]:
+    user = get_current_user(authorization)
+    require_role(user, "auditor")
     """Create a new refactor proposal."""
     from uuid import uuid4
 
@@ -64,7 +70,11 @@ async def create_proposal(req: CreateProposalRequest) -> dict[str, Any]:
 
 
 @router.get("")
-async def list_proposals(status: str | None = None) -> list[dict[str, Any]]:
+async def list_proposals(
+    status: str | None = None,
+    authorization: str = Header(...),
+) -> list[dict[str, Any]]:
+    get_current_user(authorization)  # any authenticated user can list
     """List all proposals, optionally filtered by status."""
     proposals = list(_proposals.values())
     if status:
@@ -73,7 +83,11 @@ async def list_proposals(status: str | None = None) -> list[dict[str, Any]]:
 
 
 @router.get("/{proposal_id}")
-async def get_proposal(proposal_id: str) -> dict[str, Any]:
+async def get_proposal(
+    proposal_id: str,
+    authorization: str = Header(...),
+) -> dict[str, Any]:
+    get_current_user(authorization)
     """Get a single proposal by ID."""
     if proposal_id not in _proposals:
         raise HTTPException(status_code=404, detail="Proposal not found")
@@ -81,7 +95,13 @@ async def get_proposal(proposal_id: str) -> dict[str, Any]:
 
 
 @router.patch("/{proposal_id}")
-async def update_proposal(proposal_id: str, req: UpdateProposalRequest) -> dict[str, Any]:
+async def update_proposal(
+    proposal_id: str,
+    req: UpdateProposalRequest,
+    authorization: str = Header(...),
+) -> dict[str, Any]:
+    user = get_current_user(authorization)
+    require_role(user, "auditor")
     """Update a proposal's status (approve/reject)."""
     if proposal_id not in _proposals:
         raise HTTPException(status_code=404, detail="Proposal not found")

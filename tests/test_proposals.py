@@ -4,6 +4,7 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 
 from atlas_api.routes.proposals import _proposals
+from tests.conftest import admin_headers
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +31,7 @@ def _get_app():
 @pytest.mark.asyncio
 async def test_create_proposal():
     app = _get_app()
+    hdrs = admin_headers()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post("/api/v1/proposals", json={
             "graph_id": "g1",
@@ -37,7 +39,7 @@ async def test_create_proposal():
             "title": "Add timeouts to all jobs",
             "author": "yoad",
             "suggestion_count": 3,
-        })
+        }, headers=hdrs)
         assert resp.status_code == 201
         data = resp.json()
         assert data["title"] == "Add timeouts to all jobs"
@@ -47,14 +49,15 @@ async def test_create_proposal():
 @pytest.mark.asyncio
 async def test_list_proposals():
     app = _get_app()
+    hdrs = admin_headers()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         await client.post("/api/v1/proposals", json={
             "graph_id": "g1", "plan_id": "p1", "title": "Fix 1"
-        })
+        }, headers=hdrs)
         await client.post("/api/v1/proposals", json={
             "graph_id": "g2", "plan_id": "p2", "title": "Fix 2"
-        })
-        resp = await client.get("/api/v1/proposals")
+        }, headers=hdrs)
+        resp = await client.get("/api/v1/proposals", headers=hdrs)
         assert resp.status_code == 200
         assert len(resp.json()) == 2
 
@@ -62,17 +65,18 @@ async def test_list_proposals():
 @pytest.mark.asyncio
 async def test_approve_lifecycle():
     app = _get_app()
+    hdrs = admin_headers()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Create
         resp = await client.post("/api/v1/proposals", json={
             "graph_id": "g1", "plan_id": "p1", "title": "Fix timeouts"
-        })
+        }, headers=hdrs)
         pid = resp.json()["id"]
 
         # Submit (draft → pending)
         resp = await client.patch(f"/api/v1/proposals/{pid}", json={
             "status": "pending"
-        })
+        }, headers=hdrs)
         assert resp.json()["status"] == "pending"
 
         # Approve (pending → approved)
@@ -80,7 +84,7 @@ async def test_approve_lifecycle():
             "status": "approved",
             "reviewer": "admin",
             "comment": "Looks good!"
-        })
+        }, headers=hdrs)
         assert resp.json()["status"] == "approved"
         assert len(resp.json()["comments"]) == 1
 
@@ -88,16 +92,17 @@ async def test_approve_lifecycle():
 @pytest.mark.asyncio
 async def test_invalid_transition():
     app = _get_app()
+    hdrs = admin_headers()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post("/api/v1/proposals", json={
             "graph_id": "g1", "plan_id": "p1", "title": "Fix"
-        })
+        }, headers=hdrs)
         pid = resp.json()["id"]
 
         # Cannot go from draft → approved directly
         resp = await client.patch(f"/api/v1/proposals/{pid}", json={
             "status": "approved"
-        })
+        }, headers=hdrs)
         assert resp.status_code == 400
 
 
@@ -105,5 +110,5 @@ async def test_invalid_transition():
 async def test_404_not_found():
     app = _get_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get("/api/v1/proposals/nonexistent")
+        resp = await client.get("/api/v1/proposals/nonexistent", headers=admin_headers())
         assert resp.status_code == 404

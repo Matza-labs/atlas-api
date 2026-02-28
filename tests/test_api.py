@@ -1,18 +1,36 @@
 """Integration tests for the FastAPI application."""
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from httpx import AsyncClient, ASGITransport
 
 from atlas_api.main import app
 from atlas_api.db import get_db_connection, get_db_pool
 
-# Mock dependencies
+# Mock dependencies — pool.connection() and conn.cursor() are synchronous methods
+# in psycopg that return async context managers, so we use MagicMock (not AsyncMock)
+# for the method itself and set __aenter__/__aexit__ on the returned object.
 async def mock_get_db_connection():
-    yield AsyncMock()
+    mock_cur = AsyncMock()
+    mock_cur.fetchall = AsyncMock(return_value=[])
+    mock_cur.fetchone = AsyncMock(return_value=None)
+    cur_cm = MagicMock()
+    cur_cm.__aenter__ = AsyncMock(return_value=mock_cur)
+    cur_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_conn = MagicMock()
+    mock_conn.cursor = MagicMock(return_value=cur_cm)
+    mock_conn.execute = AsyncMock()
+    yield mock_conn
 
 async def mock_get_db_pool():
-    return AsyncMock()
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock()
+    conn_cm = MagicMock()
+    conn_cm.__aenter__ = AsyncMock(return_value=mock_conn)
+    conn_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_pool = MagicMock()
+    mock_pool.connection = MagicMock(return_value=conn_cm)
+    return mock_pool
 
 app.dependency_overrides[get_db_connection] = mock_get_db_connection
 app.dependency_overrides[get_db_pool] = mock_get_db_pool

@@ -14,9 +14,17 @@ class ApiConfig(BaseSettings):
     db_port: int = 5432
     db_name: str = "atlas_db"
     db_user: str = "postgres"
-    db_password: str = "postgres"
+    db_password: str = ""  # Required — set ATLAS_API_DB_PASSWORD env var
     db_pool_min_size: int = 4
     db_pool_max_size: int = 20
+
+    # CORS — comma-separated list of allowed origins, e.g. "https://app.example.com"
+    cors_allowed_origins: str = ""  # Empty = localhost:3000 only
+
+    # Rate limiting (slowapi) — set ATLAS_API_RATE_LIMIT_ENABLED=false in tests
+    rate_limit_enabled: bool = True
+    rate_limit_default: str = "200/minute"   # per-IP across all routes
+    rate_limit_webhooks: str = "500/hour"    # per-IP on webhook POST endpoints
 
     @property
     def database_url(self) -> str:
