@@ -145,14 +145,45 @@ def verify_token(token: str, secret: str | None = None) -> User:
     )
 
 
-# ── API Key support ─────────────────────────────────────────────────
+# ── API Key support (PostgreSQL-backed with sync cache) ─────────────
 
-# In-memory API key store (PostgreSQL in production)
+# In-memory cache synced from PostgreSQL on startup
 _api_keys: dict[str, User] = {}
 
 
+async def init_api_keys_from_db(pool) -> None:
+    """Load all API keys from PostgreSQL into the in-memory cache.
+
+    Call this during application startup after the pool is open.
+    """
+    global _api_keys
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT key, user_id, username, role FROM api_keys")
+            for row in await cur.fetchall():
+                _api_keys[row[0]] = User(id=row[1], username=row[2], role=row[3])
+    logger.info("Loaded %d API keys from database", len(_api_keys))
+
+
+async def register_api_key_db(pool, key: str, user: User) -> None:
+    """Register an API key in both PostgreSQL and the sync cache."""
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """INSERT INTO api_keys (key, user_id, username, role)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (key) DO UPDATE
+                     SET user_id = EXCLUDED.user_id,
+                         username = EXCLUDED.username,
+                         role = EXCLUDED.role""",
+                (key, user.id, user.username, user.role),
+            )
+        await conn.commit()
+    _api_keys[key] = user
+
+
 def register_api_key(key: str, user: User) -> None:
-    """Register an API key for CI integration."""
+    """Register an API key in the in-memory cache (sync compat)."""
     _api_keys[key] = user
 
 

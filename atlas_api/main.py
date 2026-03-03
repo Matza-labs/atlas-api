@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="PipelineAtlas API",
     description="Control plane for PipelineAtlas CI/CD intelligence.",
-    version="0.1.0",
+    version="1.0.0",
     lifespan=lifespan,
 )
 

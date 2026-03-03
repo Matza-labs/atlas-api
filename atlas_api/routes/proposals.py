@@ -1,10 +1,11 @@
-"""Proposal API routes — CRUD for refactor proposals.
+"""Proposal API routes — CRUD for refactor proposals (PostgreSQL-backed).
 
 Endpoints:
     POST   /api/v1/proposals      — create a new proposal
     GET    /api/v1/proposals      — list proposals (with status filter)
     GET    /api/v1/proposals/{id} — get full proposal detail
     PATCH  /api/v1/proposals/{id} — approve/reject/modify
+    POST   /api/v1/proposals/{id}/apply — auto-apply approved fixes
 """
 
 from __future__ import annotations
@@ -12,14 +13,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Depends
 from pydantic import BaseModel
 from atlas_api.auth import get_current_user, require_role
+from atlas_api.db import get_db_connection
 
 router = APIRouter(prefix="/api/v1/proposals", tags=["proposals"])
-
-# In-memory store (MVP — would be PostgreSQL in production)
-_proposals: dict[str, dict[str, Any]] = {}
 
 
 class CreateProposalRequest(BaseModel):
@@ -38,60 +37,94 @@ class UpdateProposalRequest(BaseModel):
     comment: str = ""
 
 
+async def _fetch_proposal(cur: Any, proposal_id: str) -> dict[str, Any] | None:
+    """Fetch a single proposal with its comments."""
+    await cur.execute("SELECT * FROM proposals WHERE id = %s", (proposal_id,))
+    row = await cur.fetchone()
+    if not row:
+        return None
+    cols = [d.name for d in cur.description]
+    proposal = dict(zip(cols, row))
+
+    await cur.execute(
+        "SELECT author, text, created_at FROM proposal_comments WHERE proposal_id = %s ORDER BY created_at",
+        (proposal_id,),
+    )
+    comment_rows = await cur.fetchall()
+    proposal["comments"] = [
+        {"author": r[0], "text": r[1], "created_at": r[2].isoformat() if r[2] else ""}
+        for r in comment_rows
+    ]
+    # Convert timestamps
+    for key in ("created_at", "updated_at"):
+        if isinstance(proposal.get(key), datetime):
+            proposal[key] = proposal[key].isoformat()
+    return proposal
+
+
 @router.post("", status_code=201)
 async def create_proposal(
     req: CreateProposalRequest,
     authorization: str = Header(...),
+    conn=Depends(get_db_connection),
 ) -> dict[str, Any]:
+    """Create a new refactor proposal."""
     user = get_current_user(authorization)
     require_role(user, "auditor")
-    """Create a new refactor proposal."""
+
     from uuid import uuid4
-
     proposal_id = str(uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
 
-    proposal = {
-        "id": proposal_id,
-        "graph_id": req.graph_id,
-        "plan_id": req.plan_id,
-        "title": req.title,
-        "description": req.description,
-        "author": req.author,
-        "status": "draft",
-        "suggestion_count": req.suggestion_count,
-        "diff_preview": req.diff_preview,
-        "comments": [],
-        "created_at": now,
-        "updated_at": now,
-    }
-    _proposals[proposal_id] = proposal
-    return proposal
+    async with conn.cursor() as cur:
+        await cur.execute(
+            """INSERT INTO proposals (id, graph_id, plan_id, title, description, author, status, suggestion_count, diff_preview, created_at, updated_at)
+               VALUES (%s, %s, %s, %s, %s, %s, 'draft', %s, %s, %s, %s)""",
+            (proposal_id, req.graph_id, req.plan_id, req.title, req.description,
+             req.author, req.suggestion_count, req.diff_preview, now, now),
+        )
+    await conn.commit()
+
+    async with conn.cursor() as cur:
+        return await _fetch_proposal(cur, proposal_id)  # type: ignore[return-value]
 
 
 @router.get("")
 async def list_proposals(
     status: str | None = None,
     authorization: str = Header(...),
+    conn=Depends(get_db_connection),
 ) -> list[dict[str, Any]]:
-    get_current_user(authorization)  # any authenticated user can list
     """List all proposals, optionally filtered by status."""
-    proposals = list(_proposals.values())
-    if status:
-        proposals = [p for p in proposals if p["status"] == status]
-    return proposals
+    get_current_user(authorization)
+
+    async with conn.cursor() as cur:
+        if status:
+            await cur.execute("SELECT id FROM proposals WHERE status = %s ORDER BY created_at DESC", (status,))
+        else:
+            await cur.execute("SELECT id FROM proposals ORDER BY created_at DESC")
+        ids = [r[0] for r in await cur.fetchall()]
+        results = []
+        for pid in ids:
+            p = await _fetch_proposal(cur, pid)
+            if p:
+                results.append(p)
+    return results
 
 
 @router.get("/{proposal_id}")
 async def get_proposal(
     proposal_id: str,
     authorization: str = Header(...),
+    conn=Depends(get_db_connection),
 ) -> dict[str, Any]:
-    get_current_user(authorization)
     """Get a single proposal by ID."""
-    if proposal_id not in _proposals:
+    get_current_user(authorization)
+    async with conn.cursor() as cur:
+        proposal = await _fetch_proposal(cur, proposal_id)
+    if not proposal:
         raise HTTPException(status_code=404, detail="Proposal not found")
-    return _proposals[proposal_id]
+    return proposal
 
 
 @router.patch("/{proposal_id}")
@@ -99,14 +132,18 @@ async def update_proposal(
     proposal_id: str,
     req: UpdateProposalRequest,
     authorization: str = Header(...),
+    conn=Depends(get_db_connection),
 ) -> dict[str, Any]:
+    """Update a proposal's status (approve/reject)."""
     user = get_current_user(authorization)
     require_role(user, "auditor")
-    """Update a proposal's status (approve/reject)."""
-    if proposal_id not in _proposals:
+
+    async with conn.cursor() as cur:
+        proposal = await _fetch_proposal(cur, proposal_id)
+    if not proposal:
         raise HTTPException(status_code=404, detail="Proposal not found")
 
-    proposal = _proposals[proposal_id]
+    now = datetime.now(timezone.utc)
 
     if req.status:
         valid_transitions = {
@@ -119,31 +156,41 @@ async def update_proposal(
                 status_code=400,
                 detail=f"Cannot transition from '{proposal['status']}' to '{req.status}'"
             )
-        proposal["status"] = req.status
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE proposals SET status = %s, updated_at = %s WHERE id = %s",
+                (req.status, now, proposal_id),
+            )
 
     if req.comment:
-        proposal["comments"].append({
-            "author": req.reviewer or "system",
-            "text": req.comment,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "INSERT INTO proposal_comments (proposal_id, author, text, created_at) VALUES (%s, %s, %s, %s)",
+                (proposal_id, req.reviewer or "system", req.comment, now),
+            )
 
-    proposal["updated_at"] = datetime.now(timezone.utc).isoformat()
-    return proposal
+    async with conn.cursor() as cur:
+        await cur.execute("UPDATE proposals SET updated_at = %s WHERE id = %s", (now, proposal_id))
+    await conn.commit()
+
+    async with conn.cursor() as cur:
+        return await _fetch_proposal(cur, proposal_id)  # type: ignore[return-value]
 
 
 @router.post("/{proposal_id}/apply")
 async def apply_proposal(
     proposal_id: str,
     authorization: str = Header(...),
+    conn=Depends(get_db_connection),
 ) -> dict[str, Any]:
+    """Apply a proposal's refactor plan back to the CI system (simulated)."""
     user = get_current_user(authorization)
     require_role(user, "admin")
-    """Apply a proposal's refactor plan back to the CI system (simulated)."""
-    if proposal_id not in _proposals:
-        raise HTTPException(status_code=404, detail="Proposal not found")
 
-    proposal = _proposals[proposal_id]
+    async with conn.cursor() as cur:
+        proposal = await _fetch_proposal(cur, proposal_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Proposal not found")
 
     if proposal["status"] != "approved":
         raise HTTPException(
@@ -151,13 +198,17 @@ async def apply_proposal(
             detail=f"Cannot apply proposal in '{proposal['status']}' state. Must be 'approved'."
         )
 
-    # In Phase 4, "Auto-Modification" triggers the writer generated patch
-    # For now, it simulates the push to Github/Gitlab and marks applied.
-    proposal["status"] = "applied"
-    proposal["comments"].append({
-        "author": "system",
-        "text": "Automated fixes successfully pushed to repository.",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    })
-    proposal["updated_at"] = datetime.now(timezone.utc).isoformat()
-    return proposal
+    now = datetime.now(timezone.utc)
+    async with conn.cursor() as cur:
+        await cur.execute(
+            "UPDATE proposals SET status = 'applied', updated_at = %s WHERE id = %s",
+            (now, proposal_id),
+        )
+        await cur.execute(
+            "INSERT INTO proposal_comments (proposal_id, author, text, created_at) VALUES (%s, %s, %s, %s)",
+            (proposal_id, "system", "Automated fixes successfully pushed to repository.", now),
+        )
+    await conn.commit()
+
+    async with conn.cursor() as cur:
+        return await _fetch_proposal(cur, proposal_id)  # type: ignore[return-value]
